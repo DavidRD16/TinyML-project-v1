@@ -17,7 +17,7 @@ seed = 4321
 random.seed(seed)
 np.random.seed(seed)
 
-mixedPrecision = True
+mixedPrecision = False
 scaledWeightsSize = 1
 samples_per_device = 5 # Amount of samples of each word to send to each device
 batch_size = 1 # Must be even, has to be split into 3 types of samples
@@ -35,8 +35,8 @@ keywords_buttons = {
 
 output_nodes = len(keywords_buttons)
 test_samples_amount = 60
-size_hidden_nodes = 25 #25
-size_hidden_layer = (65+1)*size_hidden_nodes #650+1
+size_hidden_nodes = 1 #25
+size_hidden_layer = (650+1)*size_hidden_nodes #650+1
 size_output_layer = (size_hidden_nodes+1)*output_nodes
 momentum = 0.9
 learningRate= 0.6
@@ -318,71 +318,25 @@ def getDevices():
     devices = [read_port(f"Port device_{i+1}: ") for i in range(num_devices)]
     devices_connected = devices
 
-def FlGetModel(d, device_index, devices_hidden_layer, devices_output_layer, devices_num_epochs, old_devices_connected):
-    global size_hidden_layer, size_output_layer
-    #d.reset_input_buffer()
-    #d.reset_output_buffer()
-    #d.timeout = 5
+def FlGetModel(device, deviceIndex):
+    print(f'[{device.port}] Starting connection...') # Handshake
+    device.write(b'>') # Python --> SYN --> Arduino
+    syn_ack = device.read()
+    while (syn_ack[:-2] != "ok"):
+        if debug: print(f"[{device.port}] Incorrect confirmation:", syn_ack)
+        syn_ack = device.readline().decode()
+    if debug: print(f"[{device.port}] SYN confirmation:", syn_ack)
 
-    print(f'[{d.port}] Starting connection...') # Handshake
-    d.write(b'>') # Python --> SYN --> Arduino
-    syn_ack = d.read()
-    print(f'[{d.port}] syn_ack: {syn_ack}') # Handshake
-
-    # if d.read() == b'<': # Python <-- SYN ACK <-- Arduino
-    d.write(b's') # Python --> ACK --> Arduino
-    
-    print(f"[{d.port}] Connection accepted.")
-    devices_connected.append(d)
-    d.timeout = None
-
-    print_until_keyword('start', d)
-    num_epochs = int(d.readline()[:-2])
-    devices_num_epochs.append(num_epochs)
-    print(f"[{d.port}] Num epochs: {num_epochs}")
-
-    min_w = readFloat(d)
-    max_w = readFloat(d)
-
-    # print(f"[{d.port}] Scaled weight size: {scaledWeightsSize}")
-    print(f"[{d.port}] Min weight: {min_w}, max weight: {max_w}")
-    a, b = getScaleRange()
-    print(f"[{d.port}] Scaling precision: {(abs(max_w-min_w)) / abs(a-b)}")
-
-    if debug: print(f"[{d.port}] Receiving model...")
-    ini_time = time.time()
-
-    for i in range(size_hidden_layer): # hidden layer
-        if mixedPrecision:
-            scaledWeight = readInt(d, scaledWeightsSize)
-            #scaled_in_float = readFloat(d)
-            # float_weight = readFloat(d)
-            weight = deScaleWeight(min_w, max_w, scaledWeight)
-            # if i < 5 and d.port == 'com6': print(f"[{d.port}] Recevied Weight {i}: {float_weight}")
-            # if abs(float_weight - weight) > 0.3: print(f"[{d.port}] Scaled weight: {scaledWeight} (float: {scaled_in_float}), Float weight (hid): {float_weight}, descaled: {weight}. Difference: {abs(float_weight - weight)}")
-        else: weight = readFloat(d)
-        
-        if debug and i % 1000 == 0 and d.port == 'com6': print(f"[{d.port}] Received Weight {i}: {weight}")
-        devices_hidden_layer[device_index][i] = weight
-
-    for i in range(size_output_layer): # output layer
-        if mixedPrecision:
-            scaledWeight = readInt(d, scaledWeightsSize)
-            #scaled_in_float = readFloat(d)
-            # float_weight = readFloat(d)
-            weight = deScaleWeight(min_w, max_w, scaledWeight)
-            #if abs(float_weight - weight) > 0.3: print(f"[{d.port}] Scaled weight: {scaledWeight} (float: {scaled_in_float}), Float weight (hid): {float_weight}, descaled: {weight}. Difference: {abs(float_weight - weight)}")
-        else: weight = readFloat(d)
-        
-        if debug and i % 1000 == 0 and d.port == 'com6': print(f"[{d.port}] Received Weight {i}: {weight}")
-        devices_output_layer[device_index][i] = weight
-
-    print(f"[{d.port}] Model received from {d.port} ({time.time()-ini_time} seconds)")
-
-    # if it was not connected before, we dont use the devices' model
-    if not d in old_devices_connected:
-        devices_num_epochs[device_index] = 0
-        print(f"[{d.port}] Model not used. The device has an outdated model")
+def startFL():
+    global devices
+    threads = []
+    for deviceIndex, device in enumerate(devices):
+        print(f'[{device.port}] Starting thread...')
+        thread = threading.Thread(target=FlGetModel, args=(device, deviceIndex))
+        thread.daemon = True
+        thread.start()
+        threads.append(thread)
+    for thread in threads: thread.join()
 
 def readFloat(d):
     data = d.read(4)
