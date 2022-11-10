@@ -10,7 +10,7 @@
 #include "neural_network.h"
 #include <SPI.h>
 #include <WiFi.h>
-#include <Arduino_JSON.h>
+#include <ArduinoJson.h>
 
 char ssid[] = "yourSSID";      //  your network SSID (name)
 char pass[] = "yourPASS";   // your network password
@@ -48,7 +48,7 @@ const float threshold = 0.6;
 
 uint16_t num_epochs = 0;
 
-bool mixed_precision = true;
+bool mixed_precision = false;
 typedef int8_t scaledType;
 
 /**
@@ -67,6 +67,9 @@ void setup() {
     digitalWrite(LEDB, HIGH);
     
     connect_to_wifi();
+    
+            Serial.print( "Free RAM = " );
+            Serial.println( freeRam() );
     //delay(10000);
     //register_to_FLserver(); no funciona
     init_network_model();
@@ -242,10 +245,13 @@ void loop() {
     if (Serial.available()) {
         char read = Serial.read();
         if (read == '>') {
-            startFL();
+            //startFL();
+            //sendDataFL();
+            // receiveDataFL();
         } else if (read == 't') {
             receiveSampleAndTrain();
             sendDataFL();
+            sendAllHiddenNodes();
             // receiveDataFL();
         } else { // Error
             Serial.println("Unknown command " + read);
@@ -292,22 +298,28 @@ void sendDataFL(){
 // close any connection before send a new request.
   // This will free the socket on the WiFi shield
   client.stop();
-  Serial.println("sending data...");
+  Serial.println(F("sending data..."));
   // if there's a successful connection:
   if (client.connect(server, 80)) {
-    Serial.println("connecting...");
+    Serial.println(F("connecting..."));
 
-    //send HTTP POST request
-    client.println("POST /FL/sendData HTTP/1.1");
+    //send HTTP POST request for everything except the hiddenodes (because they don't fit in the document)
+    client.println(F("POST /FL/sendData HTTP/1.1"));
     client.println("Host: " + stringHost);
-    client.println("User-Agent: ArduinoWiFi/1.1");
-    client.println("Connection: close");
+    client.println(F("User-Agent: ArduinoWiFi/1.1"));
+    client.println(F("Connection: close"));
     client.println(F("Content-Type: application/json"));
-    JSONVar myJSONObject;
-    myJSONObject["message"] = ">";
-    myJSONObject["num_epochs"] = num_epochs;
+      
+    // Use arduinojson.org/v6/assistant to compute the capacity.
+    const size_t capacity = JSON_OBJECT_SIZE(4) + JSON_ARRAY_SIZE(outputWeightsAmt) + 60;
+    DynamicJsonDocument doc(capacity);
+    // Serial.println(F("JSONdoc capacity:..."));
+    // Serial.println(capacity);
+    
+    doc["message"] = ">";
+    doc["num_epochs"] = num_epochs;
 
-    Serial.println("computing min and max weights...");
+    Serial.println(F("computing min and max weights..."));
     // Find min and max weights
         float* float_hidden_weights = myNetwork.get_HiddenWeights();
         float* float_output_weights = myNetwork.get_OutputWeights();
@@ -322,35 +334,13 @@ void sendDataFL(){
             if (max_weight < float_output_weights[i]) max_weight = float_output_weights[i];
         }
 
-    myJSONObject["min_weight"] = (float) min_weight;
-    myJSONObject["max_weight"] = (float) max_weight;
+    doc["min_weight"] = (float) min_weight;
+    doc["max_weight"] = (float) max_weight;
         // Serial.write((byte *) &min_weight, sizeof(float));
         // Serial.write((byte *) &max_weight, sizeof(float));
 
-    Serial.println("computing HiddenWeights...");
-    // Serial.print("the number of iterations is: ");
-    // Serial.println(hiddenWeightsAmt);
-    JSONVar castedHiddenWeights;
-        // Sending hidden layer
-        char* hidden_weights = (char*) myNetwork.get_HiddenWeights();
-        for (uint16_t i = 0; i < hiddenWeightsAmt; ++i) {
-            // Serial.print("iteration: ");
-            // Serial.println(i);
-            if (mixed_precision) {
-                scaledType weight = scaleWeight(min_weight, max_weight, float_hidden_weights[i]);
-                scaledType casted = weight;
-                //Serial.write((byte*) &casted, sizeof(scaledType));
-                castedHiddenWeights[i] = casted;
-            } else {
-                //Serial.write((byte*) &float_hidden_weights[i], sizeof(float)); // debug
-                castedHiddenWeights[i] = float_hidden_weights[i];
-            }
-        }
-    
-    myJSONObject["HiddenWeights"] = castedHiddenWeights;
-
     Serial.println("computing OutputWeights...");
-    JSONVar castedOutputWeights;
+    JsonArray deviceOutputWeights = doc.createNestedArray("OutputWeights");
         // Sending output layer
         char* output_weights = (char*) myNetwork.get_OutputWeights();
         for (uint16_t i = 0; i < outputWeightsAmt; ++i) {
@@ -358,37 +348,256 @@ void sendDataFL(){
                 scaledType weight = scaleWeight(min_weight, max_weight, float_output_weights[i]);
                 scaledType casted = weight;
                 //Serial.write((byte*) &casted, sizeof(scaledType));
-                castedOutputWeights[i] = casted;
+                deviceOutputWeights.add(casted);
             } else {
                 //Serial.write((byte*) &float_output_weights[i], sizeof(float)); // debug
-                castedOutputWeights[i] = float_output_weights[i];
+                deviceOutputWeights.add(float_output_weights[i]);
             }
         }
-        
-    myJSONObject["OutputWeights"] = castedOutputWeights;
-
-        // while(!Serial.available()) {
-        //     digitalWrite(LEDB, HIGH);
-        //     delay(100);
-        //     digitalWrite(LEDB, LOW);
-        // }
-
-    String jsonString = JSON.stringify(myJSONObject);
-    Serial.print("JSON.stringify(myJSONObject) = ");
-    Serial.println(jsonString);
     
+    int JSONsize = measureJsonPretty(doc);
     client.print(F("Content-Length: "));
-    client.println(jsonString.length());
+    client.println(JSONsize);
+    // Terminate headers
     client.println(); //hay que dejar una linea vacía
-    client.println(jsonString);
-    Serial.println(F("Data were sent successfully"));
+    // Send body
+    Serial.println(F("Sending message"));
+    unsigned long StartTime = millis();
+    serializeJsonPretty(doc, client);
+    // int stringSize = JSONdocString.length();
+    // Serial.print("Message length: ");
+    // Serial.println(stringSize);
+
+    Serial.println();
+    unsigned long CurrentTime = millis();
+    unsigned long ElapsedTime = CurrentTime - StartTime;
+    Serial.print(F("Data were sent successfully in: "));
+    Serial.print(ElapsedTime);
+    Serial.println(F(" ms"));
 
     client.println();
+
+    //reset the document to release space
+    doc.clear();
+    doc.~BasicJsonDocument();
+    // //sending separate messages for the hiddenweights
+
+    // Serial.println(F("computing HiddenWeights..."));
+    
+    // StartTime = millis();
+    // size_t capacityHN = JSON_OBJECT_SIZE(4) + JSON_ARRAY_SIZE(hiddenWeightsAmt) + 60;
+    // DynamicJsonDocument docHN(capacityHN);
+    // // Serial.print("the number of iterations is: ");
+    // // Serial.println(hiddenWeightsAmt);
+    // uint16_t batchNumber = 0;
+    // docHN["batchNumber"] = batchNumber;
+    // docHN["lastBatch"] = false;
+    // JsonArray deviceHiddenWeights = docHN.createNestedArray("HiddenWeights");
+    // uint16_t batchSize = 5;
+    // docHN["batchSize"] = batchSize;
+    //     // Sending hidden layer in batches
+    //     char* hidden_weights = (char*) myNetwork.get_HiddenWeights();
+    //     for (uint16_t i = 0; i < hiddenWeightsAmt; ++i) {
+    //         Serial.print("iteration: ");
+    //         Serial.println(i);
+    //         if ((i!=0) && (i % batchSize == 0)){
+    //             //send batch
+    //             Serial.println(F("Preparing message "));
+
+    //             client.println(F("POST /FL/sendHiddenNodeBatch HTTP/1.1"));
+    //             client.println("Host: " + stringHost);
+    //             client.println(F("User-Agent: ArduinoWiFi/1.1"));
+    //             client.println(F("Connection: close"));
+    //             client.println(F("Content-Type: application/json"));
+    //             int JSONsize = measureJsonPretty(docHN);
+    //             client.print(F("Content-Length: "));
+    //             client.println(JSONsize);
+    //             // Terminate headers
+    //             client.println(); //hay que dejar una linea vacía
+    //             // Send body
+    //             serializeJsonPretty(docHN, client);
+
+    //             Serial.print(F("Sending message "));
+    //             Serial.println(batchNumber);
+
+    //             //start new batch
+    //             //reset the document to release space
+    //             docHN.clear();
+    //             docHN.~BasicJsonDocument();
+    //             docHN["batchSize"] = batchSize;
+                
+    //             Serial.println(F("new batch created"));
+    //             JsonArray deviceHiddenWeights = docHN.createNestedArray("HiddenWeights");
+    //             //if i + batchSize <= hiddenWeightsAmt-1 it's the last batch
+    //             if (i + batchSize <= hiddenWeightsAmt-1){
+    //                 docHN["lastBatch"] = true;
+    //             }
+    //             else{
+    //                 docHN["lastBatch"] = false;
+    //             }
+    //             batchNumber++;
+    //             docHN["batchNumber"] = batchNumber;
+
+    //         }
+    //         if (mixed_precision) {
+    //             scaledType weight = scaleWeight(min_weight, max_weight, float_hidden_weights[i]);
+    //             scaledType casted = weight;
+    //             //Serial.write((byte*) &casted, sizeof(scaledType));
+    //             deviceHiddenWeights.add(casted);
+    //         } else {
+    //             //Serial.write((byte*) &float_hidden_weights[i], sizeof(float)); // debug
+    //             deviceHiddenWeights.add(float_hidden_weights[i]);
+    //         }
+    //     }
+    // //hay que enviar los datos que quedan del ultimo batch que sera mas pequeño
+    // if ((hiddenWeightsAmt-1) % batchSize != 0){
+    //     //send batch
+    //     client.println(F("POST /FL/sendHiddenNodeBatch HTTP/1.1"));
+    //     client.println("Host: " + stringHost);
+    //     client.println(F("User-Agent: ArduinoWiFi/1.1"));
+    //     client.println(F("Connection: close"));
+    //     client.println(F("Content-Type: application/json"));
+    //     int JSONsize = measureJsonPretty(docHN);
+    //     client.print(F("Content-Length: "));
+    //     client.println(JSONsize);
+    //     // Terminate headers
+    //     client.println(); //hay que dejar una linea vacía
+    //     // Send body
+    //     serializeJsonPretty(docHN, client);
+
+    //     Serial.print(F("Sending message "));
+    //     Serial.println(batchNumber);
+    // }
+
+    // for (int i =0; i<stringSize; i++){
+    //     client.print(JSONdocString[i]);
+    //     Serial.print(JSONdocString[i]);
+    //     // Serial.print("iteration: ");
+    //     // Serial.println(i);
+    // }
 
   } else {
     // if you couldn't make a connection:
     Serial.println("connection failed");
   }
+//   //para que experiment_control siga avanzando
+//   Serial.print(F("ok"));
+}
+
+extern "C" char* sbrk(int incr);
+
+void display_freeram(){
+  Serial.print(F("- SRAM left: "));
+  Serial.println(freeRam());
+}
+
+int freeRam() {
+  char top;
+  return &top - reinterpret_cast<char*>(sbrk(0));
+}
+
+void sendHiddenNode(uint16_t batchNumber, boolean lastBatch, uint16_t batchSize,
+                    uint16_t start, uint16_t end)
+                    {
+    Serial.println(F("sending data..."));
+    while (client.available()){
+        // Serial.println(F("ERROR: the client is already conected"));
+        char c = client.read();
+    }
+    client.stop();
+    Serial.println(F("connection stopped"));
+    // if there's a successful connection:
+    if (client.connect(server, 80)) {
+        Serial.println(F("connecting..."));
+        float* float_hidden_weights = myNetwork.get_HiddenWeights();
+        float* float_output_weights = myNetwork.get_OutputWeights();
+        size_t capacityHN = JSON_OBJECT_SIZE(4) + JSON_ARRAY_SIZE(batchSize) + 60;
+        DynamicJsonDocument docHN(capacityHN);
+        // Serial.print("the number of iterations is: ");
+        // Serial.println(hiddenWeightsAmt);
+        docHN["batchNumber"] = batchNumber;
+        docHN["lastBatch"] = lastBatch;
+        JsonArray deviceHiddenWeights = docHN.createNestedArray("HiddenWeights");
+        docHN["batchSize"] = batchSize;
+        char* hidden_weights = (char*) myNetwork.get_HiddenWeights();
+        
+        //serializeJsonPretty(docHN, Serial);
+        for (uint16_t i = start; i < end; i++) {
+            // Serial.print("start: ");
+            // Serial.print(start);
+            // Serial.print(" end: ");
+            // Serial.println(end);
+            // Serial.print("iteration: ");
+            // Serial.println(i);
+            
+            //serializeJsonPretty(docHN, Serial);
+            deviceHiddenWeights.add(float_hidden_weights[i]);
+        }
+        //send message when all is obtained
+        Serial.println(F("Preparing message "));
+
+        client.println(F("POST /FL/sendHiddenNodeBatch HTTP/1.1"));
+        client.println("Host: " + stringHost);
+        client.println(F("User-Agent: ArduinoWiFi/1.1"));
+        client.println(F("Connection: close"));
+        client.println(F("Content-Type: application/json"));
+        int JSONsize = measureJsonPretty(docHN);
+        client.print(F("Content-Length: "));
+        client.println(JSONsize);
+        // Terminate headers
+        client.println(); //hay que dejar una linea vacía
+        // Send body
+        serializeJsonPretty(docHN, client);
+        //serializeJsonPretty(docHN, Serial);
+
+        Serial.print(F("Sending message "));
+        Serial.println(batchNumber);
+
+        docHN.clear();
+        
+    } else {
+        // if you couldn't make a connection:
+        Serial.println("connection failed");
+    }
+}
+
+void sendAllHiddenNodes(){
+// close any connection before send a new request.
+    //sending separate messages for the hiddenweights
+
+    Serial.println(F("computing HiddenWeights..."));
+    
+    unsigned long StartTime = millis();
+    uint16_t batchSize = 500;
+    uint16_t batchNumber = 0;
+    Serial.print("total iterations: ");
+    Serial.println(hiddenWeightsAmt);
+    for (uint16_t i = 0; i < hiddenWeightsAmt; i = i + batchSize) {
+            Serial.print("All iteration: ");
+            Serial.println(i);
+            // Serial.print( "Free RAM before call = " );
+            // Serial.println( freeRam() );
+            if (i + batchSize > hiddenWeightsAmt){
+                Serial.println("last");
+                sendHiddenNode(batchNumber, true, hiddenWeightsAmt-i, i, hiddenWeightsAmt);
+            }
+            else{
+                Serial.println("not last");
+                sendHiddenNode(batchNumber, false, batchSize, i, i + batchSize);
+            }
+            //client.stop();
+            Serial.println("batch sent");
+            // Serial.print( "Free RAM = " );
+            // Serial.println( freeRam() );
+            batchNumber++;
+            //delay(10000);
+        }
+
+    unsigned long CurrentTime = millis();
+    unsigned long ElapsedTime = CurrentTime - StartTime;
+    Serial.print(F("Data were sent successfully in: "));
+    Serial.print(ElapsedTime);
+    Serial.println(F(" ms"));
 }
 
 //wait for data from the FLserver
