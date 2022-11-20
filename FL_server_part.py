@@ -25,11 +25,11 @@ class Federated_learning_server:
             "blau": 4,
             # "verd": 5
         }
-        self.numdevices = 1
+        self.numdevices = 2
         self.num_devices_sent = 0
-        input_nodes = 65
+        input_nodes = 650
         output_nodes = len(keywords_buttons)
-        size_hidden_nodes = 5
+        size_hidden_nodes = 25
         self.size_hidden_layer = (input_nodes+1)*size_hidden_nodes
         self.size_output_layer = (size_hidden_nodes+1)*output_nodes
         self.devices_hidden_layer = np.empty((self.numdevices, self.size_hidden_layer), dtype='float32')

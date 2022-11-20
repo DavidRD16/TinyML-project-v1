@@ -35,8 +35,8 @@ keywords_buttons = {
 
 output_nodes = len(keywords_buttons)
 test_samples_amount = 60
-size_hidden_nodes = 5 #25
-size_hidden_layer = (65+1)*size_hidden_nodes #650+1
+size_hidden_nodes = 25 #25
+size_hidden_layer = (650+1)*size_hidden_nodes #650+1
 size_output_layer = (size_hidden_nodes+1)*output_nodes
 momentum = 0.9
 learningRate= 0.6

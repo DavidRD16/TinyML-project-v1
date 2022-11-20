@@ -12,6 +12,7 @@
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include <Portenta_H7_AsyncWebServer.h>
+#include <StreamUtils.h>
 
 char ssid[] = "yourSSID";      //  your network SSID (name)
 char pass[] = "yourPASS";   // your network password
@@ -27,6 +28,9 @@ WiFiServer receivingServer(80);
 // server address: IP address of the flask server
 IPAddress server(999,999,999,999);
 String stringHost = "999.999.999.999";
+
+// define chunk of bytes to send when writing messages in wifi
+int byteCapacity = 64;
 
 /** Audio buffers, pointers and selectors */
 typedef struct {
@@ -115,10 +119,10 @@ void handleReceiveMainData(AsyncWebServerRequest *request)
                 } else {
                     float_hidden_weights[counterHL] = request->arg(i).toFloat();
                 }
-                Serial.print(F("received value HL = "));
-                Serial.println(request->arg(i).toFloat(),9);
-                Serial.print(F("new value HL = "));
-                Serial.println(float_hidden_weights[counterHL],9);
+                // Serial.print(F("received value HL = "));
+                // Serial.println(request->arg(i).toFloat(),9);
+                // Serial.print(F("new value HL = "));
+                // Serial.println(float_hidden_weights[counterHL],9);
                 counterHL++;
             }
             else if(request->argName(i) == "output_layer"){
@@ -535,7 +539,12 @@ void sendDataFL(){
     // Send body
     Serial.println(F("sendDataFL Sending message"));
     unsigned long StartTime = millis();
-    serializeJsonPretty(doc, client);
+    //optimized for speed
+    WriteBufferingStream bufferedWifiClient{client, byteCapacity};
+    serializeJsonPretty(doc, bufferedWifiClient);
+    bufferedWifiClient.flush();
+    //regular version
+    // serializeJsonPretty(doc, client);
     // int stringSize = JSONdocString.length();
     // Serial.print("Message length: ");
     // Serial.println(stringSize);
@@ -633,7 +642,12 @@ void sendHiddenNode(uint16_t batchNumber, boolean lastBatch, uint16_t batchSize,
         // Terminate headers
         client.println(); //hay que dejar una linea vacía
         // Send body
-        serializeJsonPretty(docHN, client);
+        //optimized for speed
+        WriteBufferingStream bufferedWifiClient{client, byteCapacity};
+        serializeJsonPretty(docHN, bufferedWifiClient);
+        bufferedWifiClient.flush();
+        
+        //serializeJsonPretty(docHN, client);
         //serializeJsonPretty(docHN, Serial);
 
         Serial.print(F("Sending message "));
