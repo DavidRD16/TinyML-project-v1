@@ -57,6 +57,34 @@ bool mixed_precision = false;
 typedef int8_t scaledType;
 
 bool waitingForFL = false;
+//define all functions in case of using .cpp. Not necessary when using .ino
+void handleRoot(AsyncWebServerRequest *request);
+void handleReceiveMainData(AsyncWebServerRequest *request);
+void handleNotFound(AsyncWebServerRequest *request);
+void initAsyncServer();
+void setup();
+void connect_to_wifi();
+void register_to_FLserver();
+void init_network_model();
+float readFloat();
+int readInt();
+void train(int nb, bool only_forward);
+void loop();
+void receiveSampleAndTrain();
+void sendDataFL();
+void display_freeram();
+int freeRam();
+void sendHiddenNode(uint16_t batchNumber, boolean lastBatch, uint16_t batchSize,
+                    uint16_t start, uint16_t end);
+void sendAllHiddenNodes();
+void receiveDataFL();
+void startFL();
+float scaleWeight(float min_w, float max_w, float weight);
+float deScaleWeight(float min_w, float max_w, scaledType weight);
+void getScaleRange(float &a, float &b);
+static scaledType microphone_audio_signal_get_data(size_t offset, size_t length, float *out_ptr);
+void printWifiStatus();
+
 //AsyncWebServer stuff
 AsyncWebServer    AsyncServer(80);
 //make the root the post message receiver since it won't receive any other kind of messages?

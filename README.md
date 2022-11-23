@@ -76,3 +76,25 @@ In order to run this project:
 1. Flash the sketch in src/main.ino into all the boards
 2. Execute FL_server_part.py to start running the Flask FL server
 3. While the server is running, execute experiment_control.py to initialize the models and send the samples, introducing the number of devices and their ports at the start of the execution. The boards will begin training and communicating with the Flask server to do FL.
+
+## Known issues
+
+### error: reference to '__FlashStringHelper' is ambiguous 
+The full error is:
+.pio/libdeps/portenta_h7_m7/StreamUtils/src/StreamUtils/Streams/ProgmemStream.hpp:22:23: error: reference to '__FlashStringHelper' is ambiguous
+   ProgmemStream(const __FlashStringHelper* ptr)
+   
+If this happens when you try to compile the project, using PlatformIO open the file ProgmemStream.hpp in the folder .pio/libdeps/portenta_h7_m7/StreamUtils/src/StreamUtils/Streams/ of the project, and comment the lines 22 and 23:
+
+```C
+class ProgmemStream : public Stream {
+ public:
+  ProgmemStream(const void* ptr, size_t size)
+      : _ptr(reinterpret_cast<const char*>(ptr)), _size(size) {}
+
+  ProgmemStream(const char* ptr) : _ptr(ptr), _size(ptr ? strlen_P(ptr) : 0) {}
+
+  // ProgmemStream(const __FlashStringHelper* ptr)
+  //     : ProgmemStream{reinterpret_cast<const char*>(ptr)} {}
+```
+Then the project should compile correctly.
