@@ -2,10 +2,11 @@ import hashlib
 import http
 import json
 import threading
-from time import time
+import time
 from urllib.parse import urlparse
 from uuid import uuid4
 import numpy as np
+import winerror
 
 import requests
 from flask import Flask, jsonify, request
@@ -25,11 +26,11 @@ class Federated_learning_server:
             "blau": 4,
             # "verd": 5
         }
-        self.numdevices = 2
+        self.numdevices = 1
         self.num_devices_sent = 0
         input_nodes = 650
         output_nodes = len(keywords_buttons)
-        size_hidden_nodes = 25
+        size_hidden_nodes = 5
         self.size_hidden_layer = (input_nodes+1)*size_hidden_nodes
         self.size_output_layer = (size_hidden_nodes+1)*output_nodes
         self.devices_hidden_layer = np.empty((self.numdevices, self.size_hidden_layer), dtype='float32')
@@ -126,11 +127,11 @@ def FlGetModel():
 
     federated_learning_server.received_min_w[device_index] = min_w
     federated_learning_server.received_max_w[device_index] = max_w    
-    print("min_weight: ")
-    print(min_w)
+    # print("min_weight: ")
+    # print(min_w)
     print(federated_learning_server.received_min_w[device_index])
-    print("max_weight: ")
-    print(max_w)
+    # print("max_weight: ")
+    # print(max_w)
     print(federated_learning_server.received_max_w[device_index])
     a, b = getScaleRange()
 
@@ -154,7 +155,7 @@ def FlGetModel():
     
     print("OutputWeights: ")
     received_output_layer = values.get('OutputWeights')
-    print(received_output_layer)
+    # print(received_output_layer)
     for i in range(federated_learning_server.size_output_layer): # output layer
         if federated_learning_server.mixedPrecision:
             scaledWeight = received_output_layer[i] #int
@@ -204,15 +205,16 @@ def FlGetHiddenNodeBatch():
 
     batchSize = values.get('batchSize')
     batchNumber = values.get('batchNumber')
+    lastInBatch = values.get('lastInBatch')
 
     print("batch: ")
     print(batchNumber)
 
     #  Receiving model...
-    print("HiddenWeights: ")
+    # print("HiddenWeights: ")
     received_hidden_layer = values.get('HiddenWeights')
-    print(received_hidden_layer)
-    for i in range(batchSize): # hidden layer
+    # print(received_hidden_layer)
+    for i in range(lastInBatch): # hidden layer
         if federated_learning_server.mixedPrecision:
             scaledWeight = received_hidden_layer[i] #int
             #scaled_in_float = readFloat(d)
@@ -226,8 +228,13 @@ def FlGetHiddenNodeBatch():
         federated_learning_server.devices_hidden_layer[device_index][i+batchNumber*batchSize] = weight
 
     #when the server receives a model calculate the medium of all previously received models
-    if (values.get('lastBatch') == True):
-        # the woloe model is received
+    # print("lastInBatch: ")
+    # print(lastInBatch)
+    # print("batchSize: ")
+    # print(batchSize)
+    print(lastInBatch != batchSize)
+    if (lastInBatch != batchSize):
+        # the whole model is received
         federated_learning_server.num_devices_sent = federated_learning_server.num_devices_sent+1
         # if all devices have sent a model start FL
         if (federated_learning_server.num_devices_sent == federated_learning_server.numdevices):
@@ -242,10 +249,10 @@ def FlGetHiddenNodeBatch():
 
 #do FL with the received models
 def doFL():
-    # print("devices_num_epochs")
-    # print(federated_learning_server.devices_num_epochs)
-    # print(len(federated_learning_server.devices_hidden_layer))
-    # print(len(federated_learning_server.devices_output_layer))
+    print("devices_num_epochs")
+    print(federated_learning_server.devices_num_epochs)
+    print(len(federated_learning_server.devices_hidden_layer))
+    print(len(federated_learning_server.devices_output_layer))
     # Processing models
     hidden_layer = np.average(federated_learning_server.devices_hidden_layer, axis=0, weights=federated_learning_server.devices_num_epochs)
     output_layer = np.average(federated_learning_server.devices_output_layer, axis=0, weights=federated_learning_server.devices_num_epochs)
@@ -265,8 +272,8 @@ def doFL():
 
     # reset values for next FL
     federated_learning_server.devices_num_epochs.clear()
-    # print("devices_num_epochs after clear")
-    # print(federated_learning_server.devices_num_epochs)
+    print("devices_num_epochs after clear")
+    print(federated_learning_server.devices_num_epochs)
 
 #send the calculated model to a board
 def FLSendModel(d, hidden_layer, output_layer):
@@ -311,30 +318,33 @@ def FLSendModel(d, hidden_layer, output_layer):
     }
     print("destination IP: ")
     print(d)
-    urlD = "http://" + d + "/sendMainData"
+    urlD = "http://" + d + ":80/sendMainData"
     print("destination URL: ")
     print(urlD)
-    print("data")
-    print(data)
-    # jsondata = jsonify(data)
-    # print("jsondata")
-    # print(jsondata.json())
+    # print("data")
+    # print(data)
+
+    # # jsondata = jsonify(data)
+    # # print("jsondata")
+    # # print(jsondata.json())
+    send_ini_time = time.time()
     with app.app_context():
-        try:
-            r = requests.post(url = urlD, data = data, timeout= 60)
-            num_retries = 10
-            for x in range(0, num_retries):
+        num_retries = 10
+        for x in range(0, num_retries):
+            try:
+                r = requests.post(url = urlD, data = data, timeout= 30)
                 if (r): 
                     # the message was received correctly
                     print("The message was received correctly")
                     break
                 else:
                     print("ERROR. Try again")
-                    r = requests.post(url = urlD, data = data, timeout= 60)
-        except (http.BadStatusLine, http.CannotSendRequest):
-            print("ERROR. Try again")
-            r = requests.post(url = urlD, data = data, timeout= 60)
-
+            except WindowsError as e:
+                if e.winerror == 10054:
+                    print("ERROR: ConnectionResetError: [WinError 10054]. Try again")
+    
+    send_time = time.time()-send_ini_time
+    print(f'Message sent to board in ({send_time} seconds)')
     return
     
 

@@ -30,7 +30,7 @@ IPAddress server(999,999,999,999);
 String stringHost = "999.999.999.999";
 
 // define chunk of bytes to send when writing messages in wifi
-int byteCapacity = 64;
+int byteCapacity = 512;
 
 /** Audio buffers, pointers and selectors */
 typedef struct {
@@ -74,7 +74,7 @@ void receiveSampleAndTrain();
 void sendDataFL();
 void display_freeram();
 int freeRam();
-void sendHiddenNode(uint16_t batchNumber, boolean lastBatch, uint16_t batchSize,
+void sendHiddenNode(uint16_t batchNumber, uint16_t lastInBatch, uint16_t batchSize,
                     uint16_t start, uint16_t end);
 void sendAllHiddenNodes();
 void receiveDataFL();
@@ -86,7 +86,7 @@ static scaledType microphone_audio_signal_get_data(size_t offset, size_t length,
 void printWifiStatus();
 
 //AsyncWebServer stuff
-AsyncWebServer    AsyncServer(80);
+AsyncWebServer    AsyncServer(80); //81 to match FL_server
 //make the root the post message receiver since it won't receive any other kind of messages?
 void handleRoot(AsyncWebServerRequest *request)
 {
@@ -447,8 +447,10 @@ void loop() {
         } else if (read == 't') {
             // Serial.println("main loop ");
             receiveSampleAndTrain();
+
             sendDataFL();
             sendAllHiddenNodes();
+
             // waitingForFL = true;
             // receiveDataFL();
         } else { // Error
@@ -568,21 +570,25 @@ void sendDataFL(){
     Serial.println(F("sendDataFL Sending message"));
     unsigned long StartTime = millis();
     //optimized for speed
-    WriteBufferingStream bufferedWifiClient{client, byteCapacity};
+    WriteBufferingClient bufferedWifiClient{client, byteCapacity};
     serializeJsonPretty(doc, bufferedWifiClient);
     bufferedWifiClient.flush();
-    //regular version
+    // //regular version
     // serializeJsonPretty(doc, client);
-    // int stringSize = JSONdocString.length();
-    // Serial.print("Message length: ");
-    // Serial.println(stringSize);
+    // // int stringSize = JSONdocString.length();
+    // // Serial.print("Message length: ");
+    // // Serial.println(stringSize);
 
     // Serial.println();
     unsigned long CurrentTime = millis();
     unsigned long ElapsedTime = CurrentTime - StartTime;
-    Serial.print(F("Data were sent successfully in: "));
+    Serial.print(F("sendDataFL Data were sent successfully in: "));
     Serial.print(ElapsedTime);
     Serial.println(F(" ms"));
+
+    Serial.print(F("sendDataFL message weights: "));
+    Serial.print(doc.memoryUsage());
+    Serial.println(F(" bytes"));
 
     client.println();
 
@@ -618,7 +624,7 @@ int freeRam() {
   return &top - reinterpret_cast<char*>(sbrk(0));
 }
 
-void sendHiddenNode(uint16_t batchNumber, boolean lastBatch, uint16_t batchSize,
+void sendHiddenNode(uint16_t batchNumber, uint16_t lastInBatch, uint16_t batchSize,
                     uint16_t start, uint16_t end)
                     {
     Serial.println(F("sendHiddenNode sending data..."));
@@ -639,7 +645,7 @@ void sendHiddenNode(uint16_t batchNumber, boolean lastBatch, uint16_t batchSize,
         // Serial.print("the number of iterations is: ");
         // Serial.println(hiddenWeightsAmt);
         docHN["batchNumber"] = batchNumber;
-        docHN["lastBatch"] = lastBatch;
+        docHN["lastInBatch"] = lastInBatch;
         JsonArray deviceHiddenWeights = docHN.createNestedArray("HiddenWeights");
         docHN["batchSize"] = batchSize;
         char* hidden_weights = (char*) myNetwork.get_HiddenWeights();
@@ -671,12 +677,12 @@ void sendHiddenNode(uint16_t batchNumber, boolean lastBatch, uint16_t batchSize,
         client.println(); //hay que dejar una linea vacía
         // Send body
         //optimized for speed
-        WriteBufferingStream bufferedWifiClient{client, byteCapacity};
+        WriteBufferingClient bufferedWifiClient{client, byteCapacity};
         serializeJsonPretty(docHN, bufferedWifiClient);
         bufferedWifiClient.flush();
         
-        //serializeJsonPretty(docHN, client);
-        //serializeJsonPretty(docHN, Serial);
+        // serializeJsonPretty(docHN, client);
+        // //serializeJsonPretty(docHN, Serial);
 
         Serial.print(F("Sending message "));
         Serial.println(batchNumber);
@@ -711,11 +717,11 @@ void sendAllHiddenNodes(){
             // Serial.println( freeRam() );
             if (i + batchSize > hiddenWeightsAmt){
                 Serial.println("last");
-                sendHiddenNode(batchNumber, true, hiddenWeightsAmt-i, i, hiddenWeightsAmt);
+                sendHiddenNode(batchNumber, hiddenWeightsAmt-i, batchSize, i, hiddenWeightsAmt);
             }
             else{
                 Serial.println("not last");
-                sendHiddenNode(batchNumber, false, batchSize, i, i + batchSize);
+                sendHiddenNode(batchNumber, batchSize, batchSize, i, i + batchSize);
             }
             //client.stop();
             Serial.println("batch sent");
@@ -727,7 +733,7 @@ void sendAllHiddenNodes(){
 
     unsigned long CurrentTime = millis();
     unsigned long ElapsedTime = CurrentTime - StartTime;
-    Serial.print(F("Data were sent successfully in: "));
+    Serial.print(F("HiddenWeights Data were sent successfully in: "));
     Serial.print(ElapsedTime);
     Serial.println(F(" ms"));
 }
