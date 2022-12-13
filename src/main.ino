@@ -11,8 +11,6 @@
 #include <SPI.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
-#include <Portenta_H7_AsyncWebServer.h>
-#include <StreamUtils.h>
 
 char ssid[] = "yourSSID";      //  your network SSID (name)
 char pass[] = "yourPASS";   // your network password
@@ -24,6 +22,7 @@ int status = WL_IDLE_STATUS;
 
 WiFiClient client;
 WiFiServer receivingServer(80);
+WiFiClient receivedClient;
 
 // server address: IP address of the flask server
 IPAddress server(999,999,999,999);
@@ -58,10 +57,6 @@ typedef int8_t scaledType;
 
 bool waitingForFL = false;
 //define all functions in case of using .cpp. Not necessary when using .ino
-void handleRoot(AsyncWebServerRequest *request);
-void handleReceiveMainData(AsyncWebServerRequest *request);
-void handleNotFound(AsyncWebServerRequest *request);
-void initAsyncServer();
 void setup();
 void connect_to_wifi();
 void register_to_FLserver();
@@ -72,11 +67,6 @@ void train(int nb, bool only_forward);
 void loop();
 void receiveSampleAndTrain();
 void sendDataFL();
-void display_freeram();
-int freeRam();
-void sendHiddenNode(uint16_t batchNumber, uint16_t lastInBatch, uint16_t batchSize,
-                    uint16_t start, uint16_t end);
-void sendAllHiddenNodes();
 void receiveDataFL();
 void startFL();
 float scaleWeight(float min_w, float max_w, float weight);
@@ -85,153 +75,6 @@ void getScaleRange(float &a, float &b);
 static scaledType microphone_audio_signal_get_data(size_t offset, size_t length, float *out_ptr);
 void printWifiStatus();
 
-//AsyncWebServer stuff
-AsyncWebServer    AsyncServer(80); //81 to match FL_server
-//make the root the post message receiver since it won't receive any other kind of messages?
-void handleRoot(AsyncWebServerRequest *request)
-{
-    char temp[64];
-	snprintf(temp, 64 - 1, "Hello from Async_HelloServer on %s\n", BOARD_NAME);
-
-	request->send(200, "text/plain", temp);
-}
-
-void handleReceiveMainData(AsyncWebServerRequest *request)
-{
-	if (request->method() != HTTP_POST)
-	{
-		request->send(405, "text/plain", "Method Not Allowed");
-	}
-	else
-	{
-        // while(!waitingForFL){
-
-        // }
-        Serial.println(F("AsyncWebServer msg received"));
-        //List all parameters (Compatibility)
-        int args = request->args();
-        // Serial.print("ARG[min_weight]: ");
-        // Serial.println(request->arg("min_weight").c_str());
-        // Serial.print("ARG[max_weight]: ");
-        // Serial.println(request->arg("max_weight").c_str());
-        // Serial.print("ARG[output_layer]: ");
-        // Serial.println(request->arg("output_layer").c_str());
-
-        //obtain the data from the FL server message
-        float* float_hidden_weights = myNetwork.get_HiddenWeights();
-        float* float_output_weights = myNetwork.get_OutputWeights();
-        float min_received_w;
-        float max_received_w;
-
-        int counterHL = 0;
-        int counterOL = 0;
-        for (int i=0;i<args;i++)
-        {
-            // Serial.print("ARG[");
-            // Serial.print(request->argName(i).c_str());
-            // Serial.print("]: ");
-            // Serial.println(request->arg(i).c_str());
-            if(request->argName(i) == "min_weight"){
-                min_received_w = request->arg(i).toFloat();
-            }
-            else if(request->argName(i) == "min_weight"){
-                max_received_w = request->arg(i).toFloat();
-            }
-            else if(request->argName(i) == "hidden_layer"){
-                // Serial.print(F("original value HL = "));
-                // Serial.println(float_hidden_weights[counterHL],9);
-                if (mixed_precision) {
-                    scaledType val;
-                    val = int(request->arg(i).c_str());
-                    float_hidden_weights[counterHL] = deScaleWeight(min_received_w, max_received_w, val);
-                } else {
-                    float_hidden_weights[counterHL] = request->arg(i).toFloat();
-                }
-                // Serial.print(F("received value HL = "));
-                // Serial.println(request->arg(i).toFloat(),9);
-                // Serial.print(F("new value HL = "));
-                // Serial.println(float_hidden_weights[counterHL],9);
-                counterHL++;
-            }
-            else if(request->argName(i) == "output_layer"){
-                // Serial.print(F("original value OL = "));
-                // Serial.println(float_output_weights[counterOL],9);
-                if (mixed_precision) {
-                    scaledType val;
-                    val = int(request->arg(i).c_str());
-                    float_output_weights[counterOL] = deScaleWeight(min_received_w, max_received_w, val);
-                } else {
-                    float_output_weights[counterOL] = request->arg(i).toFloat();
-                }
-                // Serial.print(F("received value OL = "));
-                // Serial.println(request->arg(i).toFloat(),9);
-                // Serial.print(F("new value OL = "));
-                // Serial.println(float_output_weights[counterOL],9);
-                counterOL++;
-            }
-        }
-
-
-        // for (int i=0;i<args;i++)
-        // {
-        //     Serial.print("ARG[");
-        //     Serial.print(request->argName(i).c_str());
-        //     Serial.println("]: ");
-        //     Serial.println(request->arg(i).c_str());
-        // }
-
-        waitingForFL = false;
-        // Serial.print(F("waitingForFL = "));
-        // Serial.println(waitingForFL);
-        request->send(200, "text/plain", "POST");
-    }
-}
-
-void handleNotFound(AsyncWebServerRequest *request)
-{
-	digitalWrite(LED_BUILTIN, LOW);
-
-	String message = "File Not Found\n\n";
-
-	message += "URI: ";
-	//message += server.uri();
-	message += request->url();
-	message += "\nMethod: ";
-	message += (request->method() == HTTP_GET) ? "GET" : "POST";
-	message += "\nArguments: ";
-	message += request->args();
-	message += "\n";
-
-	for (uint8_t i = 0; i < request->args(); i++)
-	{
-		message += " " + request->argName(i) + ": " + request->arg(i) + "\n";
-	}
-
-	request->send(404, "text/plain", message);
-	digitalWrite(LED_BUILTIN, HIGH);
-}
-void initAsyncServer(){
-    AsyncServer.on("/", HTTP_GET, [](AsyncWebServerRequest * request)
-	{
-		handleRoot(request);
-	});
-
-	AsyncServer.on("/sendMainData", HTTP_POST, [](AsyncWebServerRequest * request)
-	{
-		handleReceiveMainData(request);
-	});
-	// AsyncServer.on("/inline", [](AsyncWebServerRequest * request)
-	// {
-	// 	request->send(200, "text/plain", "This works as well");
-	// });
-
-	AsyncServer.onNotFound(handleNotFound);
-
-	AsyncServer.begin();
-
-	Serial.print(F("HTTP EthernetWebServer is @ IP : "));
-	Serial.println(WiFi.localIP());
-}
 
 
 /**
@@ -250,7 +93,6 @@ void setup() {
     digitalWrite(LEDB, HIGH);
     
     connect_to_wifi();
-    initAsyncServer();
     // Serial.print( "Free RAM = " );
     // Serial.println( freeRam() );
     //delay(10000);
@@ -265,17 +107,13 @@ void connect_to_wifi() {
     // don't continue:
     while (true);
   }
-
   String fv = WiFi.firmwareVersion();
-
   if (fv != "1.1.0") {
     Serial.println("Please upgrade the firmware");
   }
 
   // attempt to connect to Wifi network:
-
   while (status != WL_CONNECTED) {
-
     Serial.print("Attempting to connect to SSID: ");
     Serial.println(ssid);
 
@@ -297,7 +135,7 @@ void register_to_FLserver(){
 
   Serial.println("registering...");
   // if there's a successful connection:
-  if (client.connect(server, 80)) {
+  if (client.connect(server, 5000)) {
       Serial.println("connected to register");
       // send the HTTP PUT request:
     client.println("GET /register HTTP/1.1");
@@ -433,6 +271,7 @@ void loop() {
     //         digitalWrite(LEDG, LOW);
     //         digitalWrite(LEDB, LOW);
     //         Serial.println("waiting for FL ");
+    //         receiveDataFL();
     // }
     if (Serial.available()) {
         char read = Serial.read();
@@ -449,10 +288,8 @@ void loop() {
             receiveSampleAndTrain();
 
             sendDataFL();
-            sendAllHiddenNodes();
-
-            // waitingForFL = true;
-            // receiveDataFL();
+            waitingForFL = true;
+            receiveDataFL();
         } else { // Error
             Serial.println("Unknown command " + read);
             while(true){
@@ -506,7 +343,7 @@ void sendDataFL(){
     // Serial.println();
     client.stop();
   // if there's a successful connection:
-  if (client.connect(server, 80)) {
+  if (client.connect(server, 5000)) {
     Serial.println(F("connecting..."));
 
     //send HTTP POST request for everything except the hiddenodes (because they don't fit in the document)
@@ -517,7 +354,7 @@ void sendDataFL(){
     client.println(F("Content-Type: application/json"));
       
     // Use arduinojson.org/v6/assistant to compute the capacity.
-    const size_t capacity = JSON_OBJECT_SIZE(4) + JSON_ARRAY_SIZE(outputWeightsAmt) + 60;
+    const size_t capacity = JSON_OBJECT_SIZE(4) + JSON_ARRAY_SIZE(hiddenWeightsAmt) + JSON_ARRAY_SIZE(outputWeightsAmt) + 60;
     DynamicJsonDocument doc(capacity);
     // Serial.println(F("JSONdoc capacity:..."));
     // Serial.println(capacity);
@@ -545,6 +382,27 @@ void sendDataFL(){
         // Serial.write((byte *) &min_weight, sizeof(float));
         // Serial.write((byte *) &max_weight, sizeof(float));
 
+
+    //Serial.println("computing HiddenWeights...");
+    // Serial.print("the number of iterations is: ");
+    // Serial.println(hiddenWeightsAmt);
+    JsonArray deviceHiddenWeights = doc.createNestedArray("HiddenWeights");
+        // Sending hidden layer
+        char* hidden_weights = (char*) myNetwork.get_HiddenWeights();
+        for (uint16_t i = 0; i < hiddenWeightsAmt; ++i) {
+            // Serial.print("iteration: ");
+            // Serial.println(i);
+            if (mixed_precision) {
+                scaledType weight = scaleWeight(min_weight, max_weight, float_hidden_weights[i]);
+                scaledType casted = weight;
+                //Serial.write((byte*) &casted, sizeof(scaledType));
+                deviceHiddenWeights.add(casted);
+            } else {
+                //Serial.write((byte*) &float_hidden_weights[i], sizeof(float)); // debug
+                deviceHiddenWeights.add(float_hidden_weights[i]);
+            }
+        }
+    
     // Serial.println("computing OutputWeights...");
     JsonArray deviceOutputWeights = doc.createNestedArray("OutputWeights");
         // Sending output layer
@@ -569,15 +427,11 @@ void sendDataFL(){
     // Send body
     Serial.println(F("sendDataFL Sending message"));
     unsigned long StartTime = millis();
-    //optimized for speed
-    WriteBufferingClient bufferedWifiClient{client, byteCapacity};
-    serializeJsonPretty(doc, bufferedWifiClient);
-    bufferedWifiClient.flush();
     // //regular version
-    // serializeJsonPretty(doc, client);
-    // // int stringSize = JSONdocString.length();
-    // // Serial.print("Message length: ");
-    // // Serial.println(stringSize);
+    serializeJsonPretty(doc, client);
+    // int stringSize = JSONdocString.length();
+    // Serial.print("Message length: ");
+    // Serial.println(stringSize);
 
     // Serial.println();
     unsigned long CurrentTime = millis();
@@ -612,139 +466,23 @@ void sendDataFL(){
 //   client.stop();
 }
 
-extern "C" char* sbrk(int incr);
-
-void display_freeram(){
-  Serial.print(F("- SRAM left: "));
-  Serial.println(freeRam());
-}
-
-int freeRam() {
-  char top;
-  return &top - reinterpret_cast<char*>(sbrk(0));
-}
-
-void sendHiddenNode(uint16_t batchNumber, uint16_t lastInBatch, uint16_t batchSize,
-                    uint16_t start, uint16_t end)
-                    {
-    Serial.println(F("sendHiddenNode sending data..."));
-    while (client.available()){
-        // Serial.println(F("ERROR: the client is already conected"));
-        char c = client.read();
-        // Serial.print(c);
-    }
-    client.stop();
-    // Serial.println(F("connection stopped"));
-    // if there's a successful connection:
-    if (client.connect(server, 80)) {
-        Serial.println(F("connecting..."));
-        float* float_hidden_weights = myNetwork.get_HiddenWeights();
-        float* float_output_weights = myNetwork.get_OutputWeights();
-        size_t capacityHN = JSON_OBJECT_SIZE(4) + JSON_ARRAY_SIZE(batchSize) + 60;
-        DynamicJsonDocument docHN(capacityHN);
-        // Serial.print("the number of iterations is: ");
-        // Serial.println(hiddenWeightsAmt);
-        docHN["batchNumber"] = batchNumber;
-        docHN["lastInBatch"] = lastInBatch;
-        JsonArray deviceHiddenWeights = docHN.createNestedArray("HiddenWeights");
-        docHN["batchSize"] = batchSize;
-        char* hidden_weights = (char*) myNetwork.get_HiddenWeights();
-        
-        //serializeJsonPretty(docHN, Serial);
-        for (uint16_t i = start; i < end; i++) {
-            // Serial.print("start: ");
-            // Serial.print(start);
-            // Serial.print(" end: ");
-            // Serial.println(end);
-            // Serial.print("iteration: ");
-            // Serial.println(i);
-            
-            //serializeJsonPretty(docHN, Serial);
-            deviceHiddenWeights.add(float_hidden_weights[i]);
-        }
-        //send message when all is obtained
-        Serial.println(F("Preparing message "));
-
-        client.println(F("POST /FL/sendHiddenNodeBatch HTTP/1.1"));
-        client.println("Host: " + stringHost);
-        client.println(F("User-Agent: ArduinoWiFi/1.1"));
-        client.println(F("Connection: close"));
-        client.println(F("Content-Type: application/json"));
-        int JSONsize = measureJsonPretty(docHN);
-        client.print(F("Content-Length: "));
-        client.println(JSONsize);
-        // Terminate headers
-        client.println(); //hay que dejar una linea vacía
-        // Send body
-        //optimized for speed
-        WriteBufferingClient bufferedWifiClient{client, byteCapacity};
-        serializeJsonPretty(docHN, bufferedWifiClient);
-        bufferedWifiClient.flush();
-        
-        // serializeJsonPretty(docHN, client);
-        // //serializeJsonPretty(docHN, Serial);
-
-        Serial.print(F("Sending message "));
-        Serial.println(batchNumber);
-
-        docHN.clear();
-        
-    } else {
-        // if you couldn't make a connection:
-        Serial.println("connection failed");
-    }
-//     // close any connection before send a new request.
-//   // This will free the socket on the WiFi shield
-//   //for the AsyncServer
-//   client.stop();
-}
-
-void sendAllHiddenNodes(){
-// close any connection before send a new request.
-    //sending separate messages for the hiddenweights
-
-    Serial.println(F("computing HiddenWeights..."));
-    
-    unsigned long StartTime = millis();
-    uint16_t batchSize = 500;
-    uint16_t batchNumber = 0;
-    Serial.print("total iterations: ");
-    Serial.println(hiddenWeightsAmt);
-    for (uint16_t i = 0; i < hiddenWeightsAmt; i = i + batchSize) {
-            Serial.print("All iteration: ");
-            Serial.println(i);
-            // Serial.print( "Free RAM before call = " );
-            // Serial.println( freeRam() );
-            if (i + batchSize > hiddenWeightsAmt){
-                Serial.println("last");
-                sendHiddenNode(batchNumber, hiddenWeightsAmt-i, batchSize, i, hiddenWeightsAmt);
-            }
-            else{
-                Serial.println("not last");
-                sendHiddenNode(batchNumber, batchSize, batchSize, i, i + batchSize);
-            }
-            //client.stop();
-            Serial.println("batch sent");
-            // Serial.print( "Free RAM = " );
-            // Serial.println( freeRam() );
-            batchNumber++;
-            //delay(10000);
-        }
-
-    unsigned long CurrentTime = millis();
-    unsigned long ElapsedTime = CurrentTime - StartTime;
-    Serial.print(F("HiddenWeights Data were sent successfully in: "));
-    Serial.print(ElapsedTime);
-    Serial.println(F(" ms"));
-}
-
 //wait for data from the FLserver
 void receiveDataFL(){
     Serial.println("receiving data");
     String receivedData;
     bool currentLineIsBlank = true;
+    while (client.available()){
+        Serial.println(F("ERROR: the client is already conected"));
+        char c = client.read();
+        Serial.print(c);
+    }
+    // Serial.println();
+    client.stop();
+    client = receivingServer.available(); 
+    Serial.println(F("start rec"));
     while (client.connected()) {
         Serial.println("messagge received");
+        waitingForFL = false;
         char c = client.read();
         Serial.write(c);
         receivedData += c;
@@ -752,18 +490,18 @@ void receiveDataFL(){
         // character) and the line is blank, the http request has ended,
         // so you can send a reply
 
-        if (c == '\n' && currentLineIsBlank) {
-            Serial.println();
-            Serial.println(receivedData);
-          // send a standard http response header
-        }
-        if (c == '\n') {
-          // you're starting a new line
-          currentLineIsBlank = true;
-        } else if (c != '\r') {
-          // you've gotten a character on the current line
-          currentLineIsBlank = false;
-        }
+        // if (c == '\n' && currentLineIsBlank) {
+        //     Serial.println();
+        //     Serial.println(receivedData);
+        //   // send a standard http response header
+        // }
+        // if (c == '\n') {
+        //   // you're starting a new line
+        //   currentLineIsBlank = true;
+        // } else if (c != '\r') {
+        //   // you've gotten a character on the current line
+        //   currentLineIsBlank = false;
+        // }
     }
 }
 

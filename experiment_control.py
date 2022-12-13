@@ -1,4 +1,3 @@
-from ast import keyword
 import serial
 from serial.tools.list_ports import comports
 
@@ -35,8 +34,8 @@ keywords_buttons = {
 
 output_nodes = len(keywords_buttons)
 test_samples_amount = 60
-size_hidden_nodes = 5 #25
-size_hidden_layer = (650+1)*size_hidden_nodes #650+1
+size_hidden_nodes = 1 #25
+size_hidden_layer = (65+1)*size_hidden_nodes #650+1
 size_output_layer = (size_hidden_nodes+1)*output_nodes
 momentum = 0.9
 learningRate= 0.6
@@ -304,20 +303,6 @@ def plot_mse_graph():
 
     plt.pause(2)
 
-    
-
-def listenDevice(device, deviceIndex):
-    global pauseListen, graph
-    while True:
-        while (pauseListen): time.sleep(0.1)
-
-        device.timeout = None
-        msg = device.readline().decode()
-        if (len(msg) > 0):
-            print(f'({device.port}):', msg, end="")
-            if msg[:-2] == 'graph': read_graph(device, deviceIndex)
-            #elif msg[:-2] == 'start_fl': startFL()
-
 def getDevices():
     global devices, devices_connected
     num_devices = read_number("Number of devices: ")
@@ -330,7 +315,7 @@ def getDevices():
     devices = [read_port(f"Port device_{i+1}: ") for i in range(num_devices)]
     devices_connected = devices
 
-def FlGetModel(device, deviceIndex):
+def FlCommand(device, deviceIndex):
     print(f'[{device.port}] Starting connection...') # Handshake
     device.write(b'>') # Python --> SYN --> Arduino
     syn_ack = device.read()
@@ -344,7 +329,7 @@ def startFL():
     threads = []
     for deviceIndex, device in enumerate(devices):
         print(f'[{device.port}] Starting thread...')
-        thread = threading.Thread(target=FlGetModel, args=(device, deviceIndex))
+        thread = threading.Thread(target=FlCommand, args=(device, deviceIndex))
         thread.daemon = True
         thread.start()
         threads.append(thread)
