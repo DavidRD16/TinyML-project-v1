@@ -35,7 +35,7 @@ keywords_buttons = {
 
 output_nodes = len(keywords_buttons)
 test_samples_amount = 60
-size_hidden_nodes = 5 #25
+size_hidden_nodes = 25 #25
 size_hidden_layer = (650+1)*size_hidden_nodes #650+1
 size_output_layer = (size_hidden_nodes+1)*output_nodes
 momentum = 0.9
@@ -69,9 +69,13 @@ def print_until_keyword(keyword, arduino):
         if msg[:-2] == keyword: break
         else: print(f'({arduino.port}):',msg, end='')
 
-def init_network(hidden_layer, output_layer, device):
+def init_network(hidden_layer, output_layer, device, deviceIndex):
     device.reset_input_buffer()
     device.write(b's')
+
+    # send deviceIndex
+    device.write(struct.pack('i', deviceIndex))
+
     print_until_keyword('start', device)
     device.write(struct.pack('i', seed))
     print(f"Seed conf: {device.readline().decode()}")
@@ -149,21 +153,21 @@ def sendSample(device, samplePath, num_button, deviceIndex, only_forward = False
         device.write(b't')
         startConfirmation = device.readline().decode()
         while (startConfirmation[:-2] != "ok"):
-            if debug: print(f"[{device.port}] Incorrect startConfirmation:", startConfirmation)
+            if debug: print(f"[{device.port}] trainConf :", startConfirmation)
             startConfirmation = device.readline().decode()
         if debug: print(f"[{device.port}] Train start confirmation:", startConfirmation)
 
         device.write(struct.pack('B', num_button))
         button_confirmation = device.readline().decode() # Button confirmation
         while (button_confirmation[:-3] != "Button "):
-            if debug: print(f"[{device.port}] Incorrect button_confirmation:", button_confirmation)
+            if debug: print(f"[{device.port}] :", button_confirmation)
             button_confirmation = device.readline().decode()
         if debug: print(f"[{device.port}] Button confirmation: {button_confirmation}")
 
         device.write(struct.pack('B', 1 if only_forward else 0))
         only_forward_conf = device.readline().decode()
         while (only_forward_conf[:-3] != "Only forward "):
-            if debug: print(f"[{device.port}] Incorrect only_forward_conf:", only_forward_conf)
+            if debug: print(f"[{device.port}] :", only_forward_conf)
             only_forward_conf = device.readline().decode()
         if debug: print(f"[{device.port}] Only forward confirmation: {only_forward_conf}") # Button confirmation
 
@@ -173,17 +177,25 @@ def sendSample(device, samplePath, num_button, deviceIndex, only_forward = False
 
         sample_received_conf = device.readline().decode()
         while (sample_received_conf[:-3] != "Sample received for button "):
-            if debug: print(f"[{device.port}] Incorrect sample_received_conf:", sample_received_conf)
+            if debug: print(f"[{device.port}] :", sample_received_conf)
             sample_received_conf = device.readline().decode()
         if debug: print(f"[{device.port}] Sample received confirmation:", sample_received_conf)
 
         graphCommand = device.readline().decode()
         while (graphCommand[:-2] != "graph"):
-            if debug: print(f"[{device.port}] Incorrect graphCommand:", graphCommand)
+            if debug: print(f"[{device.port}] :", graphCommand)
             graphCommand = device.readline().decode()
         if debug: print(f"[{device.port}] Graph command received: {graphCommand}")
         error, num_button_predicted = read_graph(device, deviceIndex)
         if debug: print(f'[{device.port}] Sample sent in: {(time.time()*1000)-ini_time} milliseconds)')
+
+        # wait for FL confrmation, the board will send it when all the boards have done a round of fl.
+        if debug: print(f'[{device.port}] Waiting for FL round ended confirmation')
+        FLConfirmation = device.readline().decode()
+        while (FLConfirmation[:-2] != "Round of FL finished"):
+            if debug: print(f"[{device.port}] FLconf :", FLConfirmation)
+            FLConfirmation = device.readline().decode()
+        if debug: print(f"[{device.port}] FL round ended confirmation:", FLConfirmation)
 
     return error, num_button == num_button_predicted
 
@@ -412,11 +424,19 @@ def sendInitWeights():
         hidden_layer = np.random.uniform(-0.5,0.5, size_hidden_layer).astype('float32')
         output_layer = np.random.uniform(-0.5, 0.5, size_output_layer).astype('float32')
 
-        thread = threading.Thread(target=init_network, args=(hidden_layer, output_layer, d))
+        thread = threading.Thread(target=init_network, args=(hidden_layer, output_layer, d, i))
         thread.daemon = True
         thread.start()
         threads.append(thread)
     for thread in threads: thread.join() # Wait for all the threads to end
+
+def getFLConfirmation(device):
+    if debug: print(f'[{device.port}] Waiting for FL round ended confirmation')
+    FLConfirmation = device.readline().decode()
+    while (FLConfirmation[:-2] != "Round of FL finished"):
+        if debug: print(f"[{device.port}] :", FLConfirmation)
+        FLConfirmation = device.readline().decode()
+    if debug: print(f"[{device.port}] FL round ended confirmation:", FLConfirmation)
 
 # Start the execution of the script
 getDevices()
@@ -450,7 +470,16 @@ if experiment != None:
         for thread in threads: thread.join() # Wait for all the threads to end
         print(f'Batch time: {time.time() - batch_ini_time} seconds)')
         # fl_ini_time = time.time()
-        # startFL()
+
+        # # wait for all devices to end a FL round
+        # for deviceIndex, device in enumerate(devices):
+        #     thread = threading.Thread(target=getFLConfirmation, args=(device))
+        #     thread.daemon = True
+        #     thread.start()
+        #     threads.append(thread)
+            
+        # for thread in threads: thread.join() # Wait for all the threads to end
+
         # print(f'FL time: {time.time() - fl_ini_time} seconds)')
         # time.sleep(1)
 
@@ -482,5 +511,3 @@ if experiment != None:
     figname = f"plots/{len(devices)}-{scaledWeightsSize if mixedPrecision else 'no'}.png"
     plt.savefig(figname, format='png')
     print(f"Generated {figname}")
-
-# plt.show()
