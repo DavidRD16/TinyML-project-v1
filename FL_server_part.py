@@ -1,13 +1,8 @@
-import hashlib
-import http
-import json
 import threading
 import time
 from urllib.parse import urlparse
 from uuid import uuid4
 import numpy as np
-import winerror
-
 import requests
 from flask import Flask, jsonify, request
 
@@ -26,9 +21,9 @@ class Federated_learning_server:
             "blau": 4,
             # "verd": 5
         }
-        self.numdevices = 1
+        self.numdevices = 2
         self.num_devices_sent = 0
-        input_nodes = 65
+        input_nodes = 6
         output_nodes = len(keywords_buttons)
         size_hidden_nodes = 1
         self.size_hidden_layer = (input_nodes+1)*size_hidden_nodes
@@ -158,16 +153,12 @@ def FlGetModel():
         # print(received_output_layer[i])
         # print(federated_learning_server.devices_output_layer[device_index][i])
 
-    # # if it was not connected before, we dont use the devices' model
-    # if not d in old_devices_connected:
-    #     devices_num_epochs[device_index] = 0
-    #     print(f"[{d.port}] Model not used. The device has an outdated model")
-
+    # the whole model is received
+    federated_learning_server.num_devices_sent = federated_learning_server.num_devices_sent+1
 
     #when the server receives a model calculate the medium of all previously received models
-    # if (federated_learning_server.num_devices_sent == federated_learning_server.numdevices):
-    #         federated_learning_server.num_devices_sent = 0
-    doFL()
+    if (federated_learning_server.num_devices_sent == federated_learning_server.numdevices):
+        doFL()
 
     response = {
         'message': 'model received from device: ',
@@ -180,15 +171,19 @@ def FlGetModel():
 def doFL():
     print("devices_num_epochs")
     print(federated_learning_server.devices_num_epochs)
-    print(len(federated_learning_server.devices_hidden_layer))
-    print(len(federated_learning_server.devices_output_layer))
+    # print(len(federated_learning_server.devices_hidden_layer))
+    # print(len(federated_learning_server.devices_output_layer))
     # Processing models
     hidden_layer = np.average(federated_learning_server.devices_hidden_layer, axis=0, weights=federated_learning_server.devices_num_epochs)
     output_layer = np.average(federated_learning_server.devices_output_layer, axis=0, weights=federated_learning_server.devices_num_epochs)
 
     # Sending model to all registered devices
-    # print("devices_num_epochs after clear")
-    # print(federated_learning_server.devices_num_epochs)
+    federated_learning_server.num_devices_sent = 0
+    # reset values for next FL
+    federated_learning_server.devices_num_epochs.clear()
+    print("devices_num_epochs after clear")
+    print(federated_learning_server.devices_num_epochs)
+    time.sleep(5)
     threads = []
     for d in federated_learning_server.client_adresses:
         thread = threading.Thread(target=FLSendModel, args=(d, hidden_layer, output_layer))
@@ -198,11 +193,11 @@ def doFL():
     for thread in threads: thread.join() # Wait for all the threads to end
 
     print("FL has been completed sucesfully <<<<<<<<<<<<<<<<<")
-
-    # reset values for next FL
-    federated_learning_server.devices_num_epochs.clear()
-    print("devices_num_epochs after clear")
-    print(federated_learning_server.devices_num_epochs)
+    # federated_learning_server.num_devices_sent = 0
+    # # reset values for next FL
+    # federated_learning_server.devices_num_epochs.clear()
+    # print("devices_num_epochs after clear")
+    # print(federated_learning_server.devices_num_epochs)
 
 #send the calculated model to a board
 def FLSendModel(d, hidden_layer, output_layer):
@@ -258,19 +253,16 @@ def FLSendModel(d, hidden_layer, output_layer):
     # # print(jsondata.json())
     send_ini_time = time.time()
     with app.app_context():
-        num_retries = 10
-        for x in range(0, num_retries):
-            try:
-                r = requests.post(url = urlD, data = data, timeout= 30)
-                if (r): 
-                    # the message was received correctly
-                    print("The message was received correctly")
-                    break
-                else:
-                    print("ERROR. Try again")
-            except WindowsError as e:
-                if e.winerror == 10054:
-                    print("ERROR: ConnectionResetError: [WinError 10054]. Try again")
+        try:
+            r = requests.post(url = urlD, data = data, timeout= 30)
+            if (r): 
+                # the message was received correctly
+                print("The message was received correctly")
+            else:
+                print("ERROR. Try again")
+        except WindowsError as e:
+            if e.winerror == 10054:
+                print("ERROR: ConnectionResetError: [WinError 10054]. Try again")
     
     send_time = time.time()-send_ini_time
     print(f'Message sent to board in ({send_time} seconds)')

@@ -28,9 +28,6 @@ WiFiClient receivedClient;
 IPAddress server(999,999,999,999);
 String stringHost = "999.999.999.999";
 
-// define chunk of bytes to send when writing messages in wifi
-int byteCapacity = 512;
-
 /** Audio buffers, pointers and selectors */
 typedef struct {
     int16_t buffer[EI_CLASSIFIER_RAW_SAMPLE_COUNT];
@@ -41,7 +38,6 @@ typedef struct {
 
 static inference_t inference;
 static bool debug_nn = false; // Set this to true to see e.g. features generated from the raw signal
-
 
 //uint8_t num_button = 0; // 0 represents none
 bool button_pressed = false;
@@ -93,11 +89,11 @@ void setup() {
     digitalWrite(LEDB, HIGH);
     
     connect_to_wifi();
-    // Serial.print( "Free RAM = " );
-    // Serial.println( freeRam() );
-    //delay(10000);
+    delay(10000);
+    receivingServer.begin();
     //register_to_FLserver(); no funciona
     init_network_model();
+    
 }
 
 void connect_to_wifi() {
@@ -128,27 +124,26 @@ void connect_to_wifi() {
   printWifiStatus();
 }
 
-void register_to_FLserver(){
-    // close any connection before send a new request.
-  // This will free the socket on the WiFi shield
-  client.stop();
-
-  Serial.println("registering...");
-  // if there's a successful connection:
-  if (client.connect(server, 5000)) {
-      Serial.println("connected to register");
-      // send the HTTP PUT request:
-    client.println("GET /register HTTP/1.1");
-    client.println("Host: " + stringHost);
-    client.println("User-Agent: ArduinoWiFi/1.1");
-    client.println("Connection: close");
-  }
-  else{
-    // if you couldn't make a connection:
-    Serial.println("register failed");
-  }
-
-}
+// // code to register client to FL server, not used
+// void register_to_FLserver(){
+//     // close any connection before send a new request.
+//   // This will free the socket on the WiFi shield
+//   client.stop();
+//   Serial.println("registering...");
+//   // if there's a successful connection:
+//   if (client.connect(server, 5000)) {
+//       Serial.println("connected to register");
+//       // send the HTTP PUT request:
+//     client.println("GET /register HTTP/1.1");
+//     client.println("Host: " + stringHost);
+//     client.println("User-Agent: ArduinoWiFi/1.1");
+//     client.println("Connection: close");
+//   }
+//   else{
+//     // if you couldn't make a connection:
+//     Serial.println("register failed");
+//   }
+// }
 
 void init_network_model() {
     digitalWrite(LEDR, LOW);
@@ -264,32 +259,21 @@ void loop() {
     digitalWrite(LEDG, HIGH);
     digitalWrite(LEDB, HIGH);
 
-    // if (waitingForFL) {
-    //         //wait so the wifi port isn't being used
-    //         delay(500);
-    //         digitalWrite(LEDR, LOW);
-    //         digitalWrite(LEDG, LOW);
-    //         digitalWrite(LEDB, LOW);
-    //         Serial.println("waiting for FL ");
-    //         receiveDataFL();
-    // }
-    if (Serial.available()) {
+    if (waitingForFL){
+        digitalWrite(LEDG, LOW);
+        delay(100);
+        digitalWrite(LEDG, HIGH);
+        receiveDataFL();
+    }   
+    else if (Serial.available()) {
         char read = Serial.read();
-        if (read == '>') {
-            delay(50);
-            digitalWrite(LEDR, LOW);
-            digitalWrite(LEDG, LOW);
-            digitalWrite(LEDB, LOW);
-            //startFL();
-            //sendDataFL();
-            // receiveDataFL();
-        } else if (read == 't') {
+        if (read == 't') {
             // Serial.println("main loop ");
             receiveSampleAndTrain();
 
             sendDataFL();
             waitingForFL = true;
-            receiveDataFL();
+            // receiveDataFL();
         } else { // Error
             Serial.println("Unknown command " + read);
             while(true){
@@ -346,7 +330,7 @@ void sendDataFL(){
   if (client.connect(server, 5000)) {
     Serial.println(F("connecting..."));
 
-    //send HTTP POST request for everything except the hiddenodes (because they don't fit in the document)
+    //send HTTP POST request for everything
     client.println(F("POST /FL/sendData HTTP/1.1"));
     client.println("Host: " + stringHost);
     client.println(F("User-Agent: ArduinoWiFi/1.1"));
@@ -379,9 +363,6 @@ void sendDataFL(){
 
     doc["min_weight"] = (float) min_weight;
     doc["max_weight"] = (float) max_weight;
-        // Serial.write((byte *) &min_weight, sizeof(float));
-        // Serial.write((byte *) &max_weight, sizeof(float));
-
 
     //Serial.println("computing HiddenWeights...");
     // Serial.print("the number of iterations is: ");
@@ -449,9 +430,6 @@ void sendDataFL(){
     //reset the document to release space
     doc.clear();
     doc.~BasicJsonDocument();
-    // //sending separate messages for the hiddenweights
-
-    // Serial.println(F("computing HiddenWeights..."));
 
   } else {
     // if you couldn't make a connection:
@@ -468,130 +446,178 @@ void sendDataFL(){
 
 //wait for data from the FLserver
 void receiveDataFL(){
+    delay(1000);
     Serial.println("receiving data");
-    String receivedData;
-    bool currentLineIsBlank = true;
     while (client.available()){
-        Serial.println(F("ERROR: the client is already conected"));
+        // Serial.println(F("ERROR: the client is already conected"));
         char c = client.read();
-        Serial.print(c);
+        // Serial.print(c);
     }
     // Serial.println();
     client.stop();
-    client = receivingServer.available(); 
     Serial.println(F("start rec"));
-    while (client.connected()) {
-        Serial.println("messagge received");
+    String messageContent = "";
+    WiFiClient client2 = receivingServer.available(); 
+    // while (!client){
+    //     client = receivingServer.available(); 
+    //     Serial.println(F("client not available"));
+    //     delay(100);
+    // }
+    bool JSONbody = false;
+    if (client2){
+        // client is available
         waitingForFL = false;
-        char c = client.read();
-        Serial.write(c);
-        receivedData += c;
-        // if you've gotten to the end of the line (received a newline
-        // character) and the line is blank, the http request has ended,
-        // so you can send a reply
+        Serial.println("new client");           // print a message out the serial port
+        String currentLine = "";                // make a String to hold incoming data from the client
+    
+        while (client2.connected()) {            // loop while the client's connected
+        
+            if (client2.available()) {             // if there's bytes to read from the client,
+                char c = client2.read();             // read a byte, then
+                // Serial.write(c);                    // print it out the serial monitor
+                if (JSONbody){
+                    if (c == '\n') {                    // if the byte is a newline character
+                        break;
+                    } else if (c != '\r') {    // if you got anything else but a carriage return character,
+                        messageContent += c;      // add it to the end of the messageContent
+                    }
+                }
+                else if (c == '\n') {                    // if the byte is a newline character
 
-        // if (c == '\n' && currentLineIsBlank) {
-        //     Serial.println();
-        //     Serial.println(receivedData);
-        //   // send a standard http response header
-        // }
-        // if (c == '\n') {
-        //   // you're starting a new line
-        //   currentLineIsBlank = true;
-        // } else if (c != '\r') {
-        //   // you've gotten a character on the current line
-        //   currentLineIsBlank = false;
-        // }
-    }
-}
+                // if the current line is blank, you got two newline characters in a row.
+                // the next line is the JSON
+                if (currentLine.length() == 0) {
+                    JSONbody = true;
+                } else {      // if you got a newline, then clear currentLine:
+                    // Serial.write(c);
+                    // Serial.println(currentLine);
+                    currentLine = "";
+                }
+                } else if (c != '\r') {    // if you got anything else but a carriage return character,
+                    currentLine += c;      // add it to the end of the currentLine
+                }
+            }
+        }
+        // close the connection:
+        client2.stop();
+        Serial.println("client disconnected");
+        // Serial.println(messageContent);
 
-void startFL() {
-    digitalWrite(LEDB, LOW);
-    Serial.write('<');
-    while(!Serial.available()) {}
-    if (Serial.read() == 's') {
-        Serial.println("start");
-        Serial.println(num_epochs);
-        num_epochs = 0;
-
-        // Find min and max weights
+        // obtain the data from the JSON
         float* float_hidden_weights = myNetwork.get_HiddenWeights();
         float* float_output_weights = myNetwork.get_OutputWeights();
-        float min_weight = float_hidden_weights[0];
-        float max_weight = float_hidden_weights[0];
-        for(uint i = 0; i < hiddenWeightsAmt; i++) {
-            if (min_weight > float_hidden_weights[i]) min_weight = float_hidden_weights[i];
-            if (max_weight < float_hidden_weights[i]) max_weight = float_hidden_weights[i];
-        }
-        for(uint i = 0; i < outputWeightsAmt; i++) {
-            if (min_weight > float_output_weights[i]) min_weight = float_output_weights[i];
-            if (max_weight < float_output_weights[i]) max_weight = float_output_weights[i];
-        }
+        float min_received_w;
+        float max_received_w;
 
-        Serial.write((byte *) &min_weight, sizeof(float));
-        Serial.write((byte *) &max_weight, sizeof(float));
-        // Serial.write(sizeof(scaledType));
-
-        // Sending hidden layer
-        char* hidden_weights = (char*) myNetwork.get_HiddenWeights();
-        for (uint16_t i = 0; i < hiddenWeightsAmt; ++i) {
-            if (mixed_precision) {
-                scaledType weight = scaleWeight(min_weight, max_weight, float_hidden_weights[i]);
-                scaledType casted = weight;
-                Serial.write((byte*) &casted, sizeof(scaledType));
-            } else {
-                Serial.write((byte*) &float_hidden_weights[i], sizeof(float)); // debug
-            }
-        }
-
-        // Sending output layer
-        char* output_weights = (char*) myNetwork.get_OutputWeights();
-        for (uint16_t i = 0; i < outputWeightsAmt; ++i) {
-            if (mixed_precision) {
-                scaledType weight = scaleWeight(min_weight, max_weight, float_output_weights[i]);
-                scaledType casted = weight;
-                Serial.write((byte*) &casted, sizeof(scaledType));
-            } else {
-                Serial.write((byte*) &float_output_weights[i], sizeof(float)); // debug
-            }
-        }
-
-        while(!Serial.available()) {
-            digitalWrite(LEDB, HIGH);
-            delay(100);
-            digitalWrite(LEDB, LOW);
-        }
-
-        float min_received_w = readFloat();
-        float max_received_w = readFloat();
-
-        // Receiving hidden layer
-        for (uint16_t i = 0; i < hiddenWeightsAmt; ++i) {
-            if (mixed_precision) {
-                scaledType val;
-                Serial.readBytes((byte*) &val, sizeof(scaledType));
-                float_hidden_weights[i] = deScaleWeight(min_received_w, max_received_w, val);
-            } else {
-                while(Serial.available() < 4) {}
-                for (int n = 0; n < 4; n++) {
-                    hidden_weights[i*4+n] = Serial.read();
+        int counterHL = 0;
+        int counterOL = 0;
+        bool iskeyword = false;
+        bool iscontent = false;
+        String keyword = "";
+        String content = "";
+        Serial.println("obtain the data from the JSON");
+        Serial.println(messageContent.length());
+        for (int i =0; i<messageContent.length(); i++){
+            // Serial.println(messageContent[i]);
+            if(messageContent[i] == '&'){
+                // Serial.println("beggining of a keyword");
+                // Serial.println(keyword);
+                // beggining of a keyword
+                iscontent = false;
+                iskeyword = true;
+                if(keyword != ""){
+                    // a key-value pair was read and needs to be filled in
+                    if(keyword == "min_weight"){
+                        min_received_w = content.toFloat();
+                    }
+                    else if(keyword == "max_weight"){
+                        max_received_w = content.toFloat();
+                    }
+                    else if(keyword == "hidden_layer"){
+                        // Serial.print(F("original value HL = "));
+                        // Serial.println(float_hidden_weights[counterHL],9);
+                        if (mixed_precision) {
+                            scaledType val;
+                            val = content.toInt();
+                            float_hidden_weights[counterHL] = deScaleWeight(min_received_w, max_received_w, val);
+                        } else {
+                            float_hidden_weights[counterHL] = content.toFloat();
+                        }
+                        // Serial.print(F("received value HL = "));
+                        // Serial.println(content.toFloat(),9);
+                        // Serial.print(F("new value HL = "));
+                        // Serial.println(float_hidden_weights[counterHL],9);
+                        counterHL++;
+                    }
+                    else if(keyword == "output_layer"){
+                        // Serial.print(F("original value OL = "));
+                        // Serial.println(float_output_weights[counterOL],9);
+                        if (mixed_precision) {
+                            scaledType val;
+                            val = content.toInt();
+                            float_output_weights[counterOL] = deScaleWeight(min_received_w, max_received_w, val);
+                        } else {
+                            float_output_weights[counterOL] = content.toFloat();
+                        }
+                        // Serial.print(F("received value OL = "));
+                        // Serial.println(content.toFloat(),9);
+                        // Serial.print(F("new value OL = "));
+                        // Serial.println(float_output_weights[counterOL],9);
+                        counterOL++;
+                    }
+                    //reset keyword and content
+                    keyword = "";
+                    content = "";
                 }
             }
+            else if(messageContent[i] == '='){
+                // beggining of value
+                iskeyword = false;
+                iscontent = true;
+            }
+            else if(iskeyword){
+                keyword += messageContent[i];
+            }
+            else if(iscontent){
+                content += messageContent[i];
+            }
+
         }
-        // Receiving output layer
-        for (uint16_t i = 0; i < outputWeightsAmt; ++i) {
+        // get the last element
+        if(keyword == "hidden_layer"){
+            // Serial.print(F("original value HL = "));
+            // Serial.println(float_hidden_weights[counterHL],9);
             if (mixed_precision) {
                 scaledType val;
-                Serial.readBytes((byte*) &val, sizeof(scaledType));
-                float_output_weights[i] = deScaleWeight(min_received_w, max_received_w, val);
+                val = content.toInt();
+                float_hidden_weights[counterHL] = deScaleWeight(min_received_w, max_received_w, val);
             } else {
-                while(Serial.available() < 4) {}
-                for (int n = 0; n < 4; n++) {
-                    output_weights[i*4+n] = Serial.read();
-                }
+                float_hidden_weights[counterHL] = content.toFloat();
             }
+            // Serial.print(F("received value HL = "));
+            // Serial.println(content.toFloat(),9);
+            // Serial.print(F("new value HL = "));
+            // Serial.println(float_hidden_weights[counterHL],9);
+            counterHL++;
         }
-        Serial.println("Model received");
+        else if(keyword == "output_layer"){
+            // Serial.print(F("original value OL = "));
+            // Serial.println(float_output_weights[counterOL],9);
+            if (mixed_precision) {
+                scaledType val;
+                val = content.toInt();
+                float_output_weights[counterOL] = deScaleWeight(min_received_w, max_received_w, val);
+            } else {
+                float_output_weights[counterOL] = content.toFloat();
+            }
+            // Serial.print(F("received value OL = "));
+            // Serial.println(content.toFloat(),9);
+            // Serial.print(F("new value OL = "));
+            // Serial.println(float_output_weights[counterOL],9);
+            counterOL++;
+        }
+        Serial.println("Data fully received from server");
+        delay(5000);
     }
 }
 
