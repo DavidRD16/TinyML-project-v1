@@ -41,9 +41,13 @@ WriteBufferingClient bufferedWifiClient{client, byteCapacity};
 bool waitingForFL = false;
 
 // time to wait to receive a response for any message sent with wifi
-int responseDelay = 5000;
+int retryDelay = 1000;
 
 unsigned long FLTime = 0;
+
+// aumount of samples to receive before beginning a FL round
+int sampleBatchSize = 0;
+int currentSample = 0;
 
 /** Audio buffers, pointers and selectors */
 typedef struct {
@@ -493,27 +497,27 @@ void connect_to_wifi() {
   printWifiStatus();
 }
 
-void register_to_FLserver(){
-    // close any connection before send a new request.
-  // This will free the socket on the WiFi shield
-  client.stop();
+// void register_to_FLserver(){
+//     // close any connection before send a new request.
+//   // This will free the socket on the WiFi shield
+//   client.stop();
 
-  Serial.println("registering...");
-  // if there's a successful connection:
-  if (client.connect(server, 5000)) {
-      Serial.println("connected to register");
-      // send the HTTP PUT request:
-    client.println("GET /register HTTP/1.1");
-    client.println("Host: " + stringHost);
-    client.println("User-Agent: ArduinoWiFi/1.1");
-    client.println("Connection: close");
-  }
-  else{
-    // if you couldn't make a connection:
-    Serial.println("register failed");
-  }
+//   Serial.println("registering...");
+//   // if there's a successful connection:
+//   if (client.connect(server, 5000)) {
+//       Serial.println("connected to register");
+//       // send the HTTP PUT request:
+//     client.println("GET /register HTTP/1.1");
+//     client.println("Host: " + stringHost);
+//     client.println("User-Agent: ArduinoWiFi/1.1");
+//     client.println("Connection: close");
+//   }
+//   else{
+//     // if you couldn't make a connection:
+//     Serial.println("register failed");
+//   }
 
-}
+// }
 
 void init_network_model() {
     digitalWrite(LEDR, LOW);
@@ -527,6 +531,8 @@ void init_network_model() {
     Serial.println("start");
 
     deviceIndex = readInt();
+
+    sampleBatchSize = readInt();
 
     int seed = readInt();
     srand(seed);
@@ -644,39 +650,38 @@ void loop() {
     }
     else if (Serial.available()) {
         char read = Serial.read();
-        if (read == '>') {
-            delay(50);
-            digitalWrite(LEDR, LOW);
-            digitalWrite(LEDG, LOW);
-            digitalWrite(LEDB, LOW);
-            //sendDataFL();
-            // receiveDataFL();
-        } else if (read == 't') {
+        if (read == 't') {
             // Serial.println("main loop ");
-            waitingForFL = true; 
-            //set value first because if it's after sending the messages 
-            //it could be set after receiving the data from the server, making an infinite loop.
-            
-            delay(deviceIndex*1000);
-            // delay a different amount for each device to try to prevent sending the first FL message at the same time
-            // the flask server blocks one of the devices if it receives 2 of the same message at the exact same time
-            
+            currentSample++;
+            // Serial.println("main loop ");
+            // Serial.println(currentSample);
+            // Serial.println(sampleBatchSize);
             receiveSampleAndTrain();
+            if (currentSample == sampleBatchSize){     
+                waitingForFL = true; 
+                //set value first because if it's after sending the messages 
+                //it could be set after receiving the data from the server, making an infinite loop.
+                
+                delay(deviceIndex*1000*2);
+                // delay a different amount for each device to try to prevent sending the first FL message at the same time
+                // the flask server blocks one of the devices if it receives 2 of the same message at the exact same time
+                currentSample = 0;
+                FLTime = millis();
 
-            FLTime = millis();
+                sendDataFL();
+                sendOutputNodes();
+                sendAllHiddenNodes();
 
-            sendDataFL();
-            sendOutputNodes();
-            sendAllHiddenNodes();
+                // Serial.print(F("Time to do a round of FL: "));
+                // unsigned long CurrentTime = millis();
+                // unsigned long ElapsedTime = CurrentTime - FLTime;
+                // Serial.print(ElapsedTime);
+                // Serial.println(F(" ms"));
 
-            // Serial.print(F("Time to do a round of FL: "));
-            // unsigned long CurrentTime = millis();
-            // unsigned long ElapsedTime = CurrentTime - FLTime;
-            // Serial.print(ElapsedTime);
-            // Serial.println(F(" ms"));
-
-            // delay(5000);
-            // receiveDataFL();
+                // delay(5000);
+                // receiveDataFL();
+            }
+            
         } else { // Error
             Serial.println("Unknown command " + read);
             while(true){
@@ -822,7 +827,7 @@ void sendDataFL(){
             // wait for server response
             while (!client.available()){
             }
-            // delay(responseDelay);
+            // delay(retryDelay);
             if (debug_text){
                 Serial.println(F("Server response received: "));
             }
@@ -884,7 +889,7 @@ void sendDataFL(){
                     delay(10000);
                 }
             }
-            delay(responseDelay);
+            delay(retryDelay);
         }
     }
 
@@ -914,7 +919,6 @@ void sendHiddenNode(uint16_t batchNumber, uint16_t lastInBatch, uint16_t batchSi
     // compute the JSON before connecting to reduce the time spent connected
     // and to reuse it if the connection fails
     float* float_hidden_weights = myNetwork.get_HiddenWeights();
-    float* float_output_weights = myNetwork.get_OutputWeights();
     size_t capacityHN = JSON_OBJECT_SIZE(4) + JSON_ARRAY_SIZE(batchSize) + 60;
     DynamicJsonDocument docHN(capacityHN);
     // Serial.print("the number of iterations is: ");
@@ -979,15 +983,12 @@ void sendHiddenNode(uint16_t batchNumber, uint16_t lastInBatch, uint16_t batchSi
             serializeJsonPretty(docHN, bufferedWifiClient);
             bufferedWifiClient.flush();
             // Serial.println(F("JSON sent"));
-            
-            // serializeJsonPretty(docHN, client);
             // //serializeJsonPretty(docHN, Serial);
-                        
+    
             // wait for server response
             while (!client.available()){
             }
-
-            // delay(responseDelay);
+            // delay(retryDelay);
             if (debug_text){
                 Serial.println(F("Server response received: "));
             }
@@ -1041,7 +1042,7 @@ void sendHiddenNode(uint16_t batchNumber, uint16_t lastInBatch, uint16_t batchSi
                     delay(10000);
                 }
             }
-            delay(responseDelay);
+            delay(retryDelay);
         }
     }
 //     // close any connection before send a new request.
@@ -1058,7 +1059,7 @@ void sendAllHiddenNodes(){
     }
     
     unsigned long StartTime = millis();
-    uint16_t batchSize = 500;
+    uint16_t batchSize = 1500;
     uint16_t batchNumber = 0;
     uint16_t numBatches = (hiddenWeightsAmt + (batchSize - 1)) / batchSize;
     if (debug_text){
@@ -1190,7 +1191,7 @@ void sendOutputNodes(){
             // wait for server response
             while (!client.available()){
             }
-            // delay(responseDelay);
+            // delay(retryDelay);
             if (debug_text){
                 Serial.println(F("Server response received: "));
             }
@@ -1244,7 +1245,7 @@ void sendOutputNodes(){
                     delay(10000);
                 }
             }
-            delay(responseDelay);
+            delay(retryDelay);
         }
     }
 //     // close any connection before send a new request.

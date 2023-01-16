@@ -23,7 +23,7 @@ class Federated_learning_server:
             "montserrat": 1,
             "pedraforca": 2,
             "vermell": 3,
-            "blau": 4,
+            # "blau": 4,
             # "verd": 5
         }
         self.numdevices = 3
@@ -315,8 +315,6 @@ def doFL():
 
     # reset values for next FL
     federated_learning_server.devices_num_epochs.clear()
-    # print("devices_num_epochs after clear")
-    # print(federated_learning_server.devices_num_epochs)
     federated_learning_server.devices_hidden_layer_batch_amount = np.zeros((federated_learning_server.numdevices))
 
     # Telling all registered devices that fl is finished

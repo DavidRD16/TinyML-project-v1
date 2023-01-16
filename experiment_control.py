@@ -19,8 +19,8 @@ np.random.seed(seed)
 
 mixedPrecision = False
 scaledWeightsSize = 1
-samples_per_device = 5 # Amount of samples of each word to send to each device
-batch_size = 1 # Must be even, has to be split into 3 types of samples
+samples_per_device = 120 # Amount of samples of each word to send to each device
+batch_size = 10 # Must be even, has to be split into 3 types of samples
 experiment = 'iid' # 'iid', 'no-iid', 'train-test', None
 
 debug = True
@@ -29,7 +29,7 @@ keywords_buttons = {
     "montserrat": 1,
     "pedraforca": 2,
     "vermell": 3,
-    "blau": 4,
+    # "blau": 4,
     # "verd": 5
 }
 
@@ -60,8 +60,11 @@ random.shuffle(blau_files)
 random.shuffle(verd_files)
 random.shuffle(vermell_files)
 
-keywords = list(sum(zip(montserrat_files, pedraforca_files, vermell_files, blau_files), ()))
-test_keywords = list(sum(zip(test_montserrat_files, test_pedraforca_files, test_vermell_files, test_blau_files), ()))
+
+keywords = list(sum(zip(montserrat_files, pedraforca_files, vermell_files), ()))
+test_keywords = list(sum(zip(test_montserrat_files, test_pedraforca_files,test_vermell_files), ()))
+# keywords = list(sum(zip(montserrat_files, pedraforca_files, vermell_files, blau_files), ()))
+# test_keywords = list(sum(zip(test_montserrat_files, test_pedraforca_files, test_vermell_files, test_blau_files), ()))
 
 def print_until_keyword(keyword, arduino):
     while True: 
@@ -75,6 +78,9 @@ def init_network(hidden_layer, output_layer, device, deviceIndex):
 
     # send deviceIndex
     device.write(struct.pack('i', deviceIndex))
+
+    # send sample batch size
+    device.write(struct.pack('i', batch_size))
 
     print_until_keyword('start', device)
     device.write(struct.pack('i', seed))
@@ -119,6 +125,14 @@ def sendSamplesIID(device, deviceIndex, batch_size, batch_index):
         samplesAccuracyTick = sum(successes_queue_map[deviceIndex].queue)/len(errors_queue_map[deviceIndex].queue)
         print("Samples accuracy tick: {samplesAccuracyTick}")
         accuracy_map[deviceIndex].append(samplesAccuracyTick)
+    
+    # wait for FL confrmation, the board will send it when all the boards have done a round of fl.
+    if debug: print(f'[{device.port}] Waiting for FL round ended confirmation')
+    FLConfirmation = device.readline().decode()
+    while (FLConfirmation[:-2] != "Round of FL finished"):
+        if debug: print(f"[{device.port}] FLconf :", FLConfirmation)
+        FLConfirmation = device.readline().decode()
+    if debug: print(f"[{device.port}] FL round ended confirmation:", FLConfirmation)
 
 def sendSamplesNonIID(device, deviceIndex, batch_size, batch_index):
     global montserrat_files, pedraforca_files, blau_files, verd_files, vermell_files
@@ -144,6 +158,14 @@ def sendSamplesNonIID(device, deviceIndex, batch_size, batch_index):
         successes_queue_map[deviceIndex].put(success)
         errors_queue_map[deviceIndex].put(error)
         accuracy_map[deviceIndex].append(sum(successes_queue_map[deviceIndex].queue)/len(errors_queue_map[deviceIndex].queue))
+    
+    # wait for FL confrmation, the board will send it when all the boards have done a round of fl.
+    if debug: print(f'[{device.port}] Waiting for FL round ended confirmation')
+    FLConfirmation = device.readline().decode()
+    while (FLConfirmation[:-2] != "Round of FL finished"):
+        if debug: print(f"[{device.port}] FLconf :", FLConfirmation)
+        FLConfirmation = device.readline().decode()
+    if debug: print(f"[{device.port}] FL round ended confirmation:", FLConfirmation)
 
 def sendSample(device, samplePath, num_button, deviceIndex, only_forward = False):
     with open(samplePath) as f:
@@ -189,13 +211,13 @@ def sendSample(device, samplePath, num_button, deviceIndex, only_forward = False
         error, num_button_predicted = read_graph(device, deviceIndex)
         if debug: print(f'[{device.port}] Sample sent in: {(time.time()*1000)-ini_time} milliseconds)')
 
-        # wait for FL confrmation, the board will send it when all the boards have done a round of fl.
-        if debug: print(f'[{device.port}] Waiting for FL round ended confirmation')
-        FLConfirmation = device.readline().decode()
-        while (FLConfirmation[:-2] != "Round of FL finished"):
-            if debug: print(f"[{device.port}] FLconf :", FLConfirmation)
-            FLConfirmation = device.readline().decode()
-        if debug: print(f"[{device.port}] FL round ended confirmation:", FLConfirmation)
+        # # wait for FL confrmation, the board will send it when all the boards have done a round of fl.
+        # if debug: print(f'[{device.port}] Waiting for FL round ended confirmation')
+        # FLConfirmation = device.readline().decode()
+        # while (FLConfirmation[:-2] != "Round of FL finished"):
+        #     if debug: print(f"[{device.port}] FLconf :", FLConfirmation)
+        #     FLConfirmation = device.readline().decode()
+        # if debug: print(f"[{device.port}] FL round ended confirmation:", FLConfirmation)
 
     return error, num_button == num_button_predicted
 
@@ -273,7 +295,7 @@ def read_port(msg):
 graph = []
 def plot_mse_graph():
     global graph, devices
-
+    f1 = plt.figure()
     plt.ion()
     # plt.title(f"Loss vs Epoch")
     plt.show()
@@ -313,6 +335,12 @@ def plot_mse_graph():
     #plt.xticks(range(0, epochs))
 
     if (experiment == 'train-test'): plt.axvline(x=samples_per_device)
+    
+    if experiment != None:
+        # figname = f"plots/BS{batch_size}-LR{learningRate}-M{momentum}-HL{size_hidden_nodes}-TT{train_time}-{experiment}.png"
+        figname = f"plots/{len(devices)}-{'mse_graph'}.png"
+        plt.savefig(figname, format='png')
+        print(f"Generated {figname}")
 
     plt.pause(2)
 
@@ -498,13 +526,17 @@ if experiment == 'train-test':
 
 
 
-# plot_mse_graph()
+plot_mse_graph()
 
+f2 = plt.figure()
 plt.ylim(bottom=0, top=1)
 plt.xlim(left=0)
 plt.autoscale(axis='x')
 for device_index, device in enumerate(devices):
    plt.plot(accuracy_map[device_index], label=f"Device {device_index}")
+plt.legend()
+plt.xlabel("Amount of samples")
+plt.ylabel("Samples accuracy (%)")
 
 if experiment != None:
     # figname = f"plots/BS{batch_size}-LR{learningRate}-M{momentum}-HL{size_hidden_nodes}-TT{train_time}-{experiment}.png"
